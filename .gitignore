@@ -1,0 +1,14 @@
+# Binaries and local builds
+*.ipa
+*.exe
+*.dll
+build/
+build_ipa/
+ios/build/
+ios/ipa_out/
+node_modules/
+.DS_Store
+Thumbs.db
+
+# Loose extracted assets (cleanly packaged in assets_parts/part_*.zip)
+www/assets/

@@ -1,0 +1,70 @@
+name: Build Dusttrust iOS IPA
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main, master ]
+
+jobs:
+  build:
+    name: Build Unsigned IPA for Sideloading (Sideloadly / AltStore / TrollStore)
+    runs-on: macos-14
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Extract game assets
+        run: |
+          mkdir -p www/assets
+          for f in assets_parts/part_*.zip; do
+            echo "Extracting $f..."
+            unzip -q -o "$f" -d www/assets/
+          done
+          echo "Total extracted assets: $(ls www/assets | wc -l)"
+
+      - name: Select Xcode
+        run: |
+          sudo xcode-select -switch /Applications/Xcode.app
+          xcodebuild -version
+
+      - name: Build iOS App via Xcode
+        run: |
+          cd ios
+          xcodebuild \
+            -project Dusttrust.xcodeproj \
+            -scheme Dusttrust \
+            -configuration Release \
+            -sdk iphoneos \
+            -derivedDataPath build \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            clean build
+
+      - name: Create IPA Package
+        run: |
+          cd ios
+          APP_PATH=$(find build/Build/Products/Release-iphoneos -name "Dusttrust.app" -type d | head -n 1)
+          echo "Found app at: $APP_PATH"
+
+          # Verify www assets exist in the app bundle, copy if needed
+          if [ ! -f "$APP_PATH/www/index.html" ] && [ ! -f "$APP_PATH/index.html" ]; then
+            echo "Copying www assets into bundle..."
+            cp -r ../www "$APP_PATH/www"
+          fi
+
+          mkdir -p ipa_out/Payload
+          cp -r "$APP_PATH" ipa_out/Payload/
+          cd ipa_out
+          zip -r -9 ../../Dusttrust.ipa Payload
+          cd ../..
+          echo "=== IPA Created Successfully ==="
+          ls -lh Dusttrust.ipa
+
+      - name: Upload IPA Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Dusttrust-iOS-IPA
+          path: Dusttrust.ipa
+          retention-days: 30
