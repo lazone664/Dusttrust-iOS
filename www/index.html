@@ -312,21 +312,26 @@
       })();
     </script>
   <script>
+    const unlockAudio = () => {
+      try {
+        const ctx = window.Scratch && window.Scratch.audioEngine && window.Scratch.audioEngine.audioContext;
+        if (ctx && ctx.state === 'suspended') {
+          ctx.resume();
+        }
+      } catch (e) {}
+    };
+    window.addEventListener('touchstart', unlockAudio, { passive: true });
+    window.addEventListener('touchend', unlockAudio, { passive: true });
+    window.addEventListener('click', unlockAudio, { passive: true });
+    window.addEventListener('keydown', unlockAudio, { passive: true });
+
     const run = async () => {
       const projectData = await getProjectData();
       await scaffolding.loadProject(projectData);
       setProgress(1);
       loadingScreen.hidden = true;
-      if (true) {
-        scaffolding.start();
-      } else {
-        launchScreen.hidden = false;
-        launchScreen.addEventListener('click', () => {
-          launchScreen.hidden = true;
-          scaffolding.start();
-        });
-        launchScreen.focus();
-      }
+      unlockAudio();
+      scaffolding.start();
     };
     run().catch(handleError);
 

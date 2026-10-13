@@ -1,25 +1,73 @@
 import UIKit
 import WebKit
+import Network
 
-class LocalSchemeHandler: NSObject, WKURLSchemeHandler {
+class LocalWebServer {
+    private var listener: NWListener?
     let baseDir: URL
+    let port: UInt16 = 8080
 
     init(baseDir: URL) {
         self.baseDir = baseDir
-        super.init()
     }
 
-    func webView(_ webView: WKWebView, start urlSchemeTask: WKURLSchemeTask) {
-        guard let url = urlSchemeTask.request.url else {
-            urlSchemeTask.didFailWithError(NSError(domain: "SchemeHandler", code: 400, userInfo: nil))
+    func start() {
+        do {
+            let params = NWParameters.tcp
+            params.allowLocalEndpointReuse = true
+            listener = try NWListener(using: params, on: NWEndpoint.Port(rawValue: port)!)
+            listener?.stateUpdateHandler = { state in
+                switch state {
+                case .ready:
+                    print("Local web server ready on http://127.0.0.1:\(self.port)")
+                default:
+                    break
+                }
+            }
+            listener?.newConnectionHandler = { [weak self] connection in
+                self?.handleConnection(connection)
+            }
+            listener?.start(queue: .global(qos: .userInitiated))
+        } catch {
+            print("Failed to start server: \(error)")
+        }
+    }
+
+    private func handleConnection(_ connection: NWConnection) {
+        connection.start(queue: .global(qos: .userInitiated))
+        receive(on: connection)
+    }
+
+    private func receive(on connection: NWConnection) {
+        connection.receive(minimumIncompleteLength: 1, maximumLength: 65536) { [weak self] data, _, _, error in
+            guard let self = self, let data = data, error == nil else {
+                connection.cancel()
+                return
+            }
+            let reqStr = String(decoding: data, as: UTF8.self)
+            self.respond(to: reqStr, connection: connection)
+        }
+    }
+
+    private func respond(to request: String, connection: NWConnection) {
+        guard let firstLine = request.components(separatedBy: "\r\n").first else {
+            connection.cancel()
             return
         }
 
-        var path = url.path
-        if path.isEmpty || path == "/" {
-            path = "/index.html"
+        let parts = firstLine.components(separatedBy: " ")
+        guard parts.count >= 2 else {
+            connection.cancel()
+            return
         }
 
+        var path = parts[1]
+        if let queryIdx = path.firstIndex(of: "?") {
+            path = String(path[..<queryIdx])
+        }
+        if path == "/" || path.isEmpty {
+            path = "/index.html"
+        }
         while path.hasPrefix("/") {
             path.removeFirst()
         }
@@ -32,28 +80,66 @@ class LocalSchemeHandler: NSObject, WKURLSchemeHandler {
             }
         }
 
-        if let data = try? Data(contentsOf: fileURL) {
-            let mime = mimeType(for: fileURL.pathExtension)
-            let headers: [String: String] = [
-                "Content-Type": mime,
-                "Content-Length": "\(data.count)",
-                "Access-Control-Allow-Origin": "*",
-                "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
-                "Access-Control-Allow-Headers": "*"
-            ]
-            let response = HTTPURLResponse(url: url, statusCode: 200, httpVersion: "HTTP/1.1", headerFields: headers)!
-            urlSchemeTask.didReceive(response)
-            urlSchemeTask.didReceive(data)
-            urlSchemeTask.didFinish()
-        } else {
-            let response = HTTPURLResponse(url: url, statusCode: 404, httpVersion: "HTTP/1.1", headerFields: nil)!
-            urlSchemeTask.didReceive(response)
-            urlSchemeTask.didFinish()
+        guard let fileData = try? Data(contentsOf: fileURL) else {
+            let res = "HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\n\r\n"
+            connection.send(content: res.data(using: .utf8), completion: .contentProcessed({ _ in connection.cancel() }))
+            return
         }
-    }
 
-    func webView(_ webView: WKWebView, stop urlSchemeTask: WKURLSchemeTask) {
-        // No asynchronous tasks to cancel
+        let mime = mimeType(for: fileURL.pathExtension)
+        let totalLen = fileData.count
+
+        // Support HTTP Range requests for streaming and decoding audio
+        var rangeStart = 0
+        var rangeEnd = totalLen - 1
+        var isRange = false
+
+        for line in request.components(separatedBy: "\r\n") {
+            if line.lowercased().hasPrefix("range:") {
+                let rangeVal = line.components(separatedBy: "=").last ?? ""
+                let rangeParts = rangeVal.components(separatedBy: "-")
+                if let s = Int(rangeParts[0].trimmingCharacters(in: .whitespaces)) {
+                    rangeStart = s
+                    isRange = true
+                }
+                if rangeParts.count > 1, let e = Int(rangeParts[1].trimmingCharacters(in: .whitespaces)) {
+                    rangeEnd = min(e, totalLen - 1)
+                    isRange = true
+                }
+                break
+            }
+        }
+
+        if isRange && rangeStart < totalLen {
+            let length = (rangeEnd - rangeStart) + 1
+            let subData = fileData.subdata(in: rangeStart..<(rangeStart + length))
+            let headers = [
+                "HTTP/1.1 206 Partial Content",
+                "Content-Type: \(mime)",
+                "Content-Length: \(subData.count)",
+                "Content-Range: bytes \(rangeStart)-\(rangeEnd)/\(totalLen)",
+                "Accept-Ranges: bytes",
+                "Access-Control-Allow-Origin: *",
+                "Connection: close"
+            ].joined(separator: "\r\n") + "\r\n\r\n"
+
+            var responseData = headers.data(using: .utf8)!
+            responseData.append(subData)
+            connection.send(content: responseData, completion: .contentProcessed({ _ in connection.cancel() }))
+        } else {
+            let headers = [
+                "HTTP/1.1 200 OK",
+                "Content-Type: \(mime)",
+                "Content-Length: \(totalLen)",
+                "Accept-Ranges: bytes",
+                "Access-Control-Allow-Origin: *",
+                "Connection: close"
+            ].joined(separator: "\r\n") + "\r\n\r\n"
+
+            var responseData = headers.data(using: .utf8)!
+            responseData.append(fileData)
+            connection.send(content: responseData, completion: .contentProcessed({ _ in connection.cancel() }))
+        }
     }
 
     private func mimeType(for ext: String) -> String {
@@ -70,6 +156,8 @@ class LocalSchemeHandler: NSObject, WKURLSchemeHandler {
         case "mp3": return "audio/mpeg"
         case "wav": return "audio/wav"
         case "ogg": return "audio/ogg"
+        case "otf": return "font/otf"
+        case "ttf": return "font/ttf"
         case "wasm": return "application/wasm"
         default: return "application/octet-stream"
         }
@@ -78,6 +166,7 @@ class LocalSchemeHandler: NSObject, WKURLSchemeHandler {
 
 class ViewController: UIViewController, WKNavigationDelegate, WKUIDelegate {
     var webView: WKWebView!
+    var server: LocalWebServer?
 
     override var prefersStatusBarHidden: Bool {
         return true
@@ -100,6 +189,10 @@ class ViewController: UIViewController, WKNavigationDelegate, WKUIDelegate {
             baseDir = Bundle.main.bundleURL
         }
 
+        // Start embedded HTTP server
+        server = LocalWebServer(baseDir: baseDir)
+        server?.start()
+
         let config = WKWebViewConfiguration()
         config.allowsInlineMediaPlayback = true
         config.mediaTypesRequiringUserActionForPlayback = []
@@ -107,9 +200,6 @@ class ViewController: UIViewController, WKNavigationDelegate, WKUIDelegate {
         let prefs = WKWebpagePreferences()
         prefs.allowsContentJavaScript = true
         config.defaultWebpagePreferences = prefs
-
-        let schemeHandler = LocalSchemeHandler(baseDir: baseDir)
-        config.setURLSchemeHandler(schemeHandler, forURLScheme: "dusttrust")
 
         webView = WKWebView(frame: view.bounds, configuration: config)
         webView.autoresizingMask = [.flexibleWidth, .flexibleHeight]
@@ -123,8 +213,11 @@ class ViewController: UIViewController, WKNavigationDelegate, WKUIDelegate {
 
         view.addSubview(webView)
 
-        if let gameURL = URL(string: "dusttrust://localhost/index.html") {
-            webView.load(URLRequest(url: gameURL))
+        // Give the local server a split second to bind before loading
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { [weak self] in
+            if let url = URL(string: "http://127.0.0.1:8080/index.html") {
+                self?.webView.load(URLRequest(url: url))
+            }
         }
     }
 
