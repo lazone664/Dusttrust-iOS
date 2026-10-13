@@ -183,8 +183,32 @@
     const errorScreenMessage = document.getElementById('error-message');
     const errorScreenStack = document.getElementById('error-stack');
 
+    const logRemote = (msg, type = 'INFO') => {
+      try {
+        console.log(`[${type}]`, msg);
+        fetch('/api/log', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ type, msg: String(msg) })
+        }).catch(() => {});
+      } catch (e) {}
+    };
+
+    window.addEventListener('error', (e) => {
+      const errTxt = 'UNCAUGHT ERROR: ' + e.message + ' at ' + e.filename + ':' + e.lineno + ':' + e.colno + '\n' + (e.error ? e.error.stack : '');
+      logRemote(errTxt, 'ERROR');
+      handleError(e.error || e.message);
+    });
+
+    window.addEventListener('unhandledrejection', (e) => {
+      const errTxt = 'UNHANDLED REJECTION: ' + (e.reason ? (e.reason.stack || e.reason) : e);
+      logRemote(errTxt, 'ERROR');
+      handleError(e.reason);
+    });
+
     const handleError = (error) => {
       console.error(error);
+      logRemote('handleError called: ' + error + '\n' + (error && error.stack ? error.stack : ''), 'ERROR');
       if (!errorScreen.hidden) return;
       errorScreen.hidden = false;
       errorScreenMessage.textContent = '' + error;
@@ -276,6 +300,9 @@
         const storage = scaffolding.storage;
         storage.onprogress = (total, loaded) => {
           setProgress(interpolate(0.2, 0.98, loaded / total));
+          if (loaded % 250 === 0 || loaded === total) {
+            logRemote(`Asset progress: ${loaded}/${total} (${Math.round((loaded/total)*100)}%)`);
+          }
         };
         
         storage.addWebStore(
@@ -329,9 +356,20 @@
       const projectData = await getProjectData();
       await scaffolding.loadProject(projectData);
       setProgress(1);
+
+      // Show the launch screen — iOS WKWebView needs a user gesture before
+      // WebGL canvas rendering starts correctly (audio + rendering unlock).
       loadingScreen.hidden = true;
-      unlockAudio();
-      scaffolding.start();
+      launchScreen.hidden = false;
+
+      const startGame = () => {
+        launchScreen.hidden = true;
+        unlockAudio();
+        scaffolding.start();
+      };
+
+      launchScreen.addEventListener('pointerup', startGame, { once: true });
+      launchScreen.addEventListener('touchend', startGame, { passive: true, once: true });
     };
     run().catch(handleError);
 
@@ -390,6 +428,7 @@
         #dt-reveal-trigger.active {
           display: block;
         }
+        #dt-hp-panel {
           background: rgba(13, 9, 23, 0.94);
           border: 1px solid rgba(190, 80, 255, 0.45);
           border-radius: 12px;
