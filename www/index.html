@@ -362,7 +362,10 @@
       loadingScreen.hidden = true;
       launchScreen.hidden = false;
 
+      let started = false;
       const startGame = () => {
+        if (started) return;
+        started = true;
         launchScreen.hidden = true;
         unlockAudio();
         scaffolding.start();
@@ -370,6 +373,7 @@
 
       launchScreen.addEventListener('pointerup', startGame, { once: true });
       launchScreen.addEventListener('touchend', startGame, { passive: true, once: true });
+      launchScreen.addEventListener('click', startGame, { once: true });
     };
     run().catch(handleError);
 

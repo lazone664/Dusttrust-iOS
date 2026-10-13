@@ -11,15 +11,20 @@ class LocalWebServer {
         self.baseDir = baseDir
     }
 
+    var onReady: (() -> Void)?
+
     func start() {
         do {
             let params = NWParameters.tcp
             params.allowLocalEndpointReuse = true
             listener = try NWListener(using: params, on: NWEndpoint.Port(rawValue: port)!)
-            listener?.stateUpdateHandler = { state in
+            listener?.stateUpdateHandler = { [weak self] state in
                 switch state {
                 case .ready:
-                    print("Local web server ready on http://127.0.0.1:\(self.port)")
+                    print("Local web server ready on http://127.0.0.1:\(self?.port ?? 8080)")
+                    DispatchQueue.main.async {
+                        self?.onReady?()
+                    }
                 default:
                     break
                 }
@@ -189,10 +194,6 @@ class ViewController: UIViewController, WKNavigationDelegate, WKUIDelegate {
             baseDir = Bundle.main.bundleURL
         }
 
-        // Start embedded HTTP server
-        server = LocalWebServer(baseDir: baseDir)
-        server?.start()
-
         let config = WKWebViewConfiguration()
         config.allowsInlineMediaPlayback = true
         config.mediaTypesRequiringUserActionForPlayback = []
@@ -211,14 +212,48 @@ class ViewController: UIViewController, WKNavigationDelegate, WKUIDelegate {
         webView.scrollView.bounces = false
         webView.scrollView.contentInsetAdjustmentBehavior = .never
 
+        if #available(iOS 16.4, *) {
+            webView.isInspectable = true
+        }
+
         view.addSubview(webView)
 
-        // Give the local server a split second to bind before loading
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { [weak self] in
+        var hasLoaded = false
+        let loadApp = { [weak self] in
+            guard let self = self, !hasLoaded else { return }
+            hasLoaded = true
+            if let url = URL(string: "http://127.0.0.1:8080/index.html") {
+                print("Loading http://127.0.0.1:8080/index.html...")
+                self.webView.load(URLRequest(url: url))
+            }
+        }
+
+        // Start embedded HTTP server
+        server = LocalWebServer(baseDir: baseDir)
+        server?.onReady = {
+            DispatchQueue.main.async {
+                loadApp()
+            }
+        }
+        server?.start()
+
+        // Fallback in case onReady fired before listener or was delayed
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+            loadApp()
+        }
+    }
+
+    func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
+        print("Provisional navigation failed: \(error.localizedDescription). Retrying in 0.5s...")
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
             if let url = URL(string: "http://127.0.0.1:8080/index.html") {
                 self?.webView.load(URLRequest(url: url))
             }
         }
+    }
+
+    func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+        print("WebView finished loading successfully.")
     }
 
     override func viewDidLayoutSubviews() {
