@@ -23,6 +23,10 @@ jobs:
           done
           echo "Total extracted assets: $(ls www/assets | wc -l)"
 
+      - name: Optimize assets for iOS (Fix WebContent Out-Of-Memory)
+        run: |
+          python3 optimize_assets.py
+
       - name: Select Xcode
         run: |
           sudo xcode-select -switch /Applications/Xcode.app

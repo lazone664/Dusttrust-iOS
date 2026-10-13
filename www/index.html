@@ -357,6 +357,13 @@
       await scaffolding.loadProject(projectData);
       setProgress(1);
 
+      // Free ~400MB of raw cached asset byte buffers to avoid iOS WebContent Jetsam memory crash
+      try {
+        if (scaffolding.storage && scaffolding.storage.builtinHelper) {
+          scaffolding.storage.builtinHelper.assets = {};
+        }
+      } catch (e) {}
+
       // Show the launch screen — iOS WKWebView needs a user gesture before
       // WebGL canvas rendering starts correctly (audio + rendering unlock).
       loadingScreen.hidden = true;

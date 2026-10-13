@@ -256,6 +256,11 @@ class ViewController: UIViewController, WKNavigationDelegate, WKUIDelegate {
         print("WebView finished loading successfully.")
     }
 
+    func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
+        print("WebContent process terminated! Reloading webView...")
+        webView.reload()
+    }
+
     override func viewDidLayoutSubviews() {
         super.viewDidLayoutSubviews()
         webView.frame = view.bounds
