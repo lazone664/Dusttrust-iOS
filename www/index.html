@@ -293,11 +293,12 @@
           resolve(xhr.response);
         };
         xhr.onerror = () => {
-          if (location.protocol === 'file:') {
-            reject(new Error('Zip environment must be used on a website, not on a local file. To fix this error, use the "Plain HTML" environment instead.'));
-          } else {
-            reject(new Error('Request to load project data failed.'));
-          }
+          fetch('./assets/project.json')
+            .then(res => res.arrayBuffer())
+            .then(buf => resolve(buf))
+            .catch(err => {
+              reject(new Error('Request to load project data failed: ' + err.message));
+            });
         };
         xhr.onprogress = (e) => {
           if (e.lengthComputable) {
